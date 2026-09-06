@@ -8904,6 +8904,275 @@ class InventoryReportScreen extends StatelessWidget {
 
   const InventoryReportScreen({super.key, required this.entries});
 
+  /// ساخت و اشتراک‌گذاری گزارش PDF انبارگردانی.
+  ///
+  /// نکته مهم: متن فارسی این گزارش عمداً دوباره با ArabicReshaper
+  /// پردازش نمی‌شود؛ چون PDF با textDirection: rtl خودش شکل‌دهی حروف
+  /// فارسی/عربی را انجام می‌دهد. همچنین از ایموجی در PDF استفاده نمی‌کنیم
+  /// تا کاراکترهای ناشناخته (�) در بعضی گوشی‌ها ایجاد نشود.
+  Future<void> _shareInventoryReport(BuildContext context) async {
+    if (entries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('هنوز گزارشی برای اشتراک‌گذاری وجود ندارد.')),
+      );
+      return;
+    }
+
+    try {
+      final font = await _loadFont();
+      final pdf = pw.Document();
+
+      final mismatches = entries.where((e) => e.difference != 0).toList();
+      final shortage = mismatches
+          .where((e) => e.difference < 0)
+          .fold<int>(0, (sum, e) => sum + e.difference.abs());
+      final surplus = mismatches
+          .where((e) => e.difference > 0)
+          .fold<int>(0, (sum, e) => sum + e.difference);
+
+      final reportDate =
+          entries.map((e) => e.date.trim()).firstWhere(
+                (date) => date.isNotEmpty,
+                orElse: _todayJalali,
+              );
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.fromLTRB(24, 28, 24, 28),
+          textDirection: pw.TextDirection.rtl,
+          maxPages: 100,
+          header: (context) => pw.Container(
+            margin: const pw.EdgeInsets.only(bottom: 10),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                _pdfShareTextWidget(
+                  'گزارش انبارگردانی',
+                  font,
+                  fontSize: 20,
+                  fontWeight: pw.FontWeight.bold,
+                  color: PdfColors.green,
+                ),
+                _pdfShareTextWidget(
+                  'تاریخ: $reportDate',
+                  font,
+                  fontSize: 9,
+                  color: PdfColors.grey700,
+                ),
+              ],
+            ),
+          ),
+          footer: (context) => pw.Align(
+            alignment: pw.Alignment.center,
+            child: _pdfShareTextWidget(
+              'صفحه ${context.pageNumber} از ${context.pagesCount}',
+              font,
+              fontSize: 8,
+              color: PdfColors.grey600,
+            ),
+          ),
+          build: (context) => [
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(12),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey400, width: 0.8),
+                borderRadius: pw.BorderRadius.circular(6),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
+                children: [
+                  _inventoryPdfSummaryItem(
+                    'کل اقلام',
+                    _toPersianDigits(entries.length.toString()),
+                    font,
+                    PdfColors.black,
+                  ),
+                  _inventoryPdfSummaryItem(
+                    'مغایرت',
+                    _toPersianDigits(mismatches.length.toString()),
+                    font,
+                    PdfColors.red,
+                  ),
+                  _inventoryPdfSummaryItem(
+                    'کسری',
+                    _toPersianDigits(shortage.toString()),
+                    font,
+                    PdfColors.red,
+                  ),
+                  _inventoryPdfSummaryItem(
+                    'اضافی',
+                    _toPersianDigits(surplus.toString()),
+                    font,
+                    PdfColors.green,
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 18),
+            _pdfShareTextWidget(
+              'جزئیات شمارش کالاها',
+              font,
+              fontSize: 15,
+              fontWeight: pw.FontWeight.bold,
+              textAlign: pw.TextAlign.right,
+            ),
+            pw.SizedBox(height: 8),
+            pw.Table(
+              border: pw.TableBorder.all(
+                color: PdfColors.grey600,
+                width: 0.7,
+              ),
+              tableWidth: pw.TableWidth.max,
+              columnWidths: const {
+                0: pw.FlexColumnWidth(0.55),
+                1: pw.FlexColumnWidth(2.55),
+                2: pw.FlexColumnWidth(1.35),
+                3: pw.FlexColumnWidth(1.15),
+                4: pw.FlexColumnWidth(1.15),
+                5: pw.FlexColumnWidth(1.05),
+              },
+              children: [
+                pw.TableRow(
+                  decoration:
+                      const pw.BoxDecoration(color: PdfColors.green100),
+                  children: [
+                    _pdfShareCell('ردیف', font, bold: true, fontSize: 8.5),
+                    _pdfShareCell('نام کالا', font, bold: true, fontSize: 8.5),
+                    _pdfShareCell('بارکد', font, bold: true, fontSize: 8.5),
+                    _pdfShareCell('موجودی سیستمی',
+                        font, bold: true, fontSize: 8.2),
+                    _pdfShareCell('موجودی واقعی',
+                        font, bold: true, fontSize: 8.2),
+                    _pdfShareCell('مغایرت', font, bold: true, fontSize: 8.5),
+                  ],
+                ),
+                ...entries.asMap().entries.map((item) {
+                  final index = item.key + 1;
+                  final entry = item.value;
+                  final difference =
+                      entry.difference > 0 ? '+${entry.difference}' : '${entry.difference}';
+
+                  return pw.TableRow(
+                    children: [
+                      _pdfShareCell(
+                        _toPersianDigits(index.toString()),
+                        font,
+                        fontSize: 8.5,
+                      ),
+                      _pdfShareCell(
+                        entry.name.trim().isEmpty ? 'بدون نام' : entry.name.trim(),
+                        font,
+                        align: pw.TextAlign.right,
+                        fontSize: 8.5,
+                      ),
+                      _pdfShareCell(
+                        _toPersianDigits(entry.barcode),
+                        font,
+                        fontSize: 8,
+                      ),
+                      _pdfShareCell(
+                        _toPersianDigits(entry.systemStock.toString()),
+                        font,
+                        fontSize: 8.5,
+                      ),
+                      _pdfShareCell(
+                        _toPersianDigits(entry.actualStock.toString()),
+                        font,
+                        fontSize: 8.5,
+                      ),
+                      _pdfShareCell(
+                        _toPersianDigits(difference),
+                        font,
+                        fontSize: 8.5,
+                      ),
+                    ],
+                  );
+                }),
+              ],
+            ),
+            pw.SizedBox(height: 16),
+            if (mismatches.isEmpty)
+              pw.Container(
+                width: double.infinity,
+                padding: const pw.EdgeInsets.all(10),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(color: PdfColors.green),
+                  borderRadius: pw.BorderRadius.circular(5),
+                ),
+                child: _pdfShareTextWidget(
+                  'هیچ مغایرتی بین موجودی سیستمی و موجودی واقعی ثبت نشده است.',
+                  font,
+                  fontSize: 9.5,
+                  textAlign: pw.TextAlign.right,
+                ),
+              )
+            else
+              _pdfShareTextWidget(
+                'تعداد اقلام دارای مغایرت: ${_toPersianDigits(mismatches.length.toString())}',
+                font,
+                fontSize: 9.5,
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColors.red,
+                textAlign: pw.TextAlign.right,
+              ),
+          ],
+        ),
+      );
+
+      final bytes = await pdf.save();
+      final directory = await getTemporaryDirectory();
+      final file = File(
+        '${directory.path}/inventory_report_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+      await file.writeAsBytes(bytes, flush: true);
+
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'application/pdf')],
+        text:
+            'گزارش انبارگردانی\nتعداد اقلام: ${_toPersianDigits(entries.length.toString())}\nتاریخ: $reportDate',
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطا در تهیه گزارش انبارگردانی: $e'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  pw.Widget _inventoryPdfSummaryItem(
+    String title,
+    String value,
+    pw.Font font,
+    PdfColor color,
+  ) {
+    return pw.Column(
+      mainAxisSize: pw.MainAxisSize.min,
+      children: [
+        _pdfShareTextWidget(
+          value,
+          font,
+          fontSize: 14,
+          fontWeight: pw.FontWeight.bold,
+          color: color,
+          textAlign: pw.TextAlign.center,
+        ),
+        pw.SizedBox(height: 3),
+        _pdfShareTextWidget(
+          title,
+          font,
+          fontSize: 8.5,
+          color: PdfColors.grey700,
+          textAlign: pw.TextAlign.center,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final mismatches = entries.where((e) => e.difference != 0).toList();
@@ -8919,6 +9188,14 @@ class InventoryReportScreen extends StatelessWidget {
         title: const Text('📊 گزارش انبارگردانی'),
         backgroundColor: Colors.green.shade700,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            onPressed:
+                entries.isEmpty ? null : () => _shareInventoryReport(context),
+            icon: const Icon(Icons.share_outlined),
+            tooltip: 'اشتراک‌گذاری گزارش انبارگردانی',
+          ),
+        ],
       ),
       body: entries.isEmpty
           ? const Center(
@@ -9006,6 +9283,17 @@ class InventoryReportScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: entries.isEmpty
+                        ? null
+                        : () => _shareInventoryReport(context),
+                    icon: const Icon(Icons.share_outlined),
+                    label: const Text('اشتراک‌گذاری گزارش انبارگردانی'),
+                  ),
+                ),
               ],
             ),
     );
